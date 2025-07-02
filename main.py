@@ -8,7 +8,8 @@ import unsloth
 import os
 import re
 import argparse
-from typing import List, Optional
+import yaml
+from typing import List, Optional, Dict, Any
 import torch
 from datasets import load_dataset, Dataset
 from vllm import SamplingParams
@@ -42,7 +43,23 @@ def parse_args():
                        help="Number of generations per step")
     parser.add_argument("--output-dir", default="outputs",
                        help="Output directory for training artifacts")
-    
+    parser.add_argument("--beta", type=float, default=0.1,
+                       help="Beta for the KL divergence loss function")
+
+    # Logging
+    parser.add_argument("--wandb-project", default="grpo-debate",
+                       help="Wandb project name")
+    parser.add_argument("--wandb-entity", default="rug-minds",
+                       help="Wandb entity name")
+    parser.add_argument("--wandb-name", default="grpo-quality-questions",
+                       help="Wandb run name")
+    parser.add_argument("--log-completions", action="store_true",
+                       help="Log completions to wandb")
+
+    # Reward configuration
+    parser.add_argument("--compare-against-reference", action="store_true",
+                       help="Compare against reference model")
+
     # Data configuration
     parser.add_argument("--dataset-split", default="train",
                        help="Dataset split to use")
@@ -51,7 +68,16 @@ def parse_args():
     parser.add_argument("--skip-inference", action="store_true",
                        help="Skip inference testing")
     
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if os.environ.get("WANDB_ENTITY") is None:
+        print(f"Setting WANDB_ENTITY to {args.wandb_entity}")
+        os.environ["WANDB_ENTITY"] = args.wandb_entity
+    if os.environ.get("WANDB_PROJECT") is None:
+        print(f"Setting WANDB_PROJECT to {args.wandb_project}")
+        os.environ["WANDB_PROJECT"] = args.wandb_project
+
+    return args
 
 
 # Constants and helper functions
@@ -123,7 +149,6 @@ def test_reward_fn__callback(
     - prompt2: the prompt for the opponent model (inference only, frozen)
     - prompt_judge: the prompt for the judge model (inference only)
     """
-    # breakpoint()
     # call the frozen opponent model (through the callback)
     callback = kwargs["callback"]
     # print("prompt_llm_frozen \n", prompt_llm_frozen)
@@ -152,16 +177,13 @@ Debater 2 said: {completion[0]['content']}""".strip())
     ]
     #  call the judge model (through the callback)
     judge_results = callback(prompts_judge, remove_lora=True)
-    breakpoint()
     parse_judge_response = lambda trained_defend, judge_results: (
         1.0 if str(trained_defend) == judge_results else 0.0
     )
-    breakpoint()
     rewards = [
         parse_judge_response(trained_defend, judge_results["completions"][i][0]['content'])
         for i, trained_defend in enumerate(trained_defends)
     ]
-    breakpoint()
     return rewards
 
 
@@ -216,8 +238,11 @@ def main():
         max_steps=args.max_steps,
         save_steps=args.max_steps,
         max_grad_norm=0.1,
-        report_to="none",  # Can use Weights & Biases
         output_dir=args.output_dir,
+        beta=args.beta,
+        report_to="wandb",  # Can use Weights & Biases
+        run_name=args.wandb_name,
+        log_completions=args.log_completions,
     )
 
     # Training
