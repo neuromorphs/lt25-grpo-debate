@@ -9,75 +9,61 @@ import os
 import re
 import argparse
 import yaml
-from typing import List, Optional, Dict, Any
 import torch
+from typing import List, Optional, Dict, Any
 from datasets import load_dataset, Dataset
 from vllm import SamplingParams
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import GRPOConfig, GRPOTrainer
-from data_preprocessing import load_quality, questions_to_datasets, get_debater_input_message, get_judge_input_message
+
+from data_preprocessing import (
+    load_quality,
+    questions_to_datasets,
+    get_debater_input_message,
+    get_judge_input_message,
+)
+
+
+class Config:
+    """Configuration class that allows dot notation access to nested dictionaries."""
+    def __init__(self, config_dict: Dict[str, Any]):
+        for key, value in config_dict.items():
+            if isinstance(value, dict):
+                setattr(self, key, Config(value))
+            else:
+                setattr(self, key, value)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
+def load_config(config_path: str = "configs/default.yaml") -> Config:
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as file:
+        config_dict = yaml.safe_load(file)
+    
+    config = Config(config_dict)
+    
+    # Set environment variables for wandb
+    if os.environ.get("WANDB_ENTITY") is None and config.logging.wandb_entity is not None:
+        print(f"Setting WANDB_ENTITY to {config.logging.wandb_entity}")
+        os.environ["WANDB_ENTITY"] = config.logging.wandb_entity
+    if os.environ.get("WANDB_PROJECT") is None and config.logging.wandb_project is not None:
+        print(f"Setting WANDB_PROJECT to {config.logging.wandb_project}")
+        os.environ["WANDB_PROJECT"] = config.logging.wandb_project
+    
+    return config
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """Parse command line arguments for config file path."""
     parser = argparse.ArgumentParser(description="GRPO Training Script for Qwen 2.5 3B")
-    
-    # Model configuration
-    parser.add_argument("--model-name", default="Qwen/Qwen2.5-3B-Instruct", 
-                       help="Model name to use for training")
-    parser.add_argument("--max-seq-length", type=int, default=1024,
-                       help="Maximum sequence length")
-    parser.add_argument("--lora-rank", type=int, default=64,
-                       help="LoRA rank (higher = smarter but slower)")
-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.5,
-                       help="GPU memory utilization ratio")
-    
-    # Training configuration
-    parser.add_argument("--learning-rate", type=float, default=5e-6,
-                       help="Learning rate")
-    parser.add_argument("--max-steps", type=int, default=250,
-                       help="Maximum training steps")
-    parser.add_argument("--batch-size", type=int, default=1,
-                       help="Per device train batch size")
-    parser.add_argument("--num-generations", type=int, default=8,
-                       help="Number of generations per step")
-    parser.add_argument("--output-dir", default="outputs",
-                       help="Output directory for training artifacts")
-    parser.add_argument("--beta", type=float, default=0.1,
-                       help="Beta for the KL divergence loss function")
-
-    # Logging
-    parser.add_argument("--wandb-project", default="grpo-debate",
-                       help="Wandb project name")
-    parser.add_argument("--wandb-entity", default="rug-minds",
-                       help="Wandb entity name")
-    parser.add_argument("--wandb-name", default="grpo-quality-questions",
-                       help="Wandb run name")
-    parser.add_argument("--log-completions", action="store_true",
-                       help="Log completions to wandb")
-
-    # Reward configuration
-    parser.add_argument("--compare-against-reference", action="store_true",
-                       help="Compare against reference model")
-
-    # Data configuration
-    parser.add_argument("--dataset-split", default="train",
-                       help="Dataset split to use")
-    
-    # Inference configuration
-    parser.add_argument("--skip-inference", action="store_true",
-                       help="Skip inference testing")
-    
-    args = parser.parse_args()
-
-    if os.environ.get("WANDB_ENTITY") is None:
-        print(f"Setting WANDB_ENTITY to {args.wandb_entity}")
-        os.environ["WANDB_ENTITY"] = args.wandb_entity
-    if os.environ.get("WANDB_PROJECT") is None:
-        print(f"Setting WANDB_PROJECT to {args.wandb_project}")
-        os.environ["WANDB_PROJECT"] = args.wandb_project
-
-    return args
+    parser.add_argument("--config", default="configs/default.yaml",
+                       help="Path to configuration YAML file")
+    return parser.parse_args()
 
 
 # Constants and helper functions
@@ -187,62 +173,101 @@ Debater 2 said: {completion[0]['content']}""".strip())
     return rewards
 
 
+def test_inference(model, tokenizer, prompt: str = "How many r's are in strawberry?"):
+    text = tokenizer.apply_chat_template([
+        {"role": "user", "content": prompt},
+    ], tokenize=False, add_generation_prompt=True)
+    
+    sampling_params = SamplingParams(
+        temperature=0.8,
+        top_p=0.95,
+        max_tokens=1024,
+    )
+    output = model.fast_generate(
+        [text],
+        sampling_params=sampling_params,
+        lora_request=None,
+    )[0].outputs[0].text
+    
+    print("Output without LoRA:")
+    print(output)
+
+    print("Testing model with LoRA...")
+    text = tokenizer.apply_chat_template([
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "How many r's are in strawberry?"},
+    ], tokenize=False, add_generation_prompt=True)
+    
+    sampling_params = SamplingParams(
+        temperature=0.8,
+        top_p=0.95,
+        max_tokens=1024,
+    )
+    output = model.fast_generate(
+        text,
+        sampling_params=sampling_params,
+        lora_request=model.load_lora("grpo_saved_lora"),
+    )[0].outputs[0].text
+    
+    print("Output with LoRA:")
+    print(output)
+    return output
+
+
 def main():
     args = parse_args()
-    # Model configuration from args
+    config = load_config(args.config)
+    
+    # Model configuration from config
     print("Loading model and tokenizer...")
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model_name,
-        max_seq_length=args.max_seq_length,
-        load_in_4bit=True,  # False for LoRA 16bit
-        fast_inference=True,  # Enable vLLM fast inference
-        max_lora_rank=args.lora_rank,
-        gpu_memory_utilization=args.gpu_memory_utilization,
+        model_name=config.model.name,
+        max_seq_length=config.model.max_seq_length,
+        load_in_4bit=config.model.load_in_4bit,
+        fast_inference=config.model.fast_inference,
+        max_lora_rank=config.model.lora_rank,
+        gpu_memory_utilization=config.model.gpu_memory_utilization,
     )
     
     print("Setting up PEFT model...")
     model = FastLanguageModel.get_peft_model(
         model,
-        r=args.lora_rank,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],  # Remove QKVO if out of memory
-        lora_alpha=args.lora_rank,
+        r=config.model.lora_rank,
+        target_modules=config.model.lora_target_modules,  # Remove QKVO if out of memory
+        lora_alpha=config.model.lora_rank,
         use_gradient_checkpointing="unsloth",  # Enable long context finetuning
         random_state=3407,
     )
 
     # Data preparation
     print("Loading dataset...")
-    # dataset = get_gsm8k_questions(args.dataset_split)
-    dataset = get_quality_questions(args.dataset_split)
+    dataset = get_quality_questions(config.data.dataset_split)
 
     # Training configuration
     print("Setting up training configuration...")
     training_args = GRPOConfig(
-        use_vllm=True,  # use vLLM for fast inference!
-        learning_rate=args.learning_rate,
-        adam_beta1=0.9,
-        adam_beta2=0.99,
-        weight_decay=0.1,
-        warmup_ratio=0.1,
-        lr_scheduler_type="cosine",
-        optim="adamw_8bit",
-        logging_steps=1,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=1,  # Increase to 4 for smoother training
-        num_generations=args.num_generations,
-        max_prompt_length=256,
-        max_completion_length=200,
-        max_steps=args.max_steps,
-        save_steps=args.max_steps,
-        max_grad_norm=0.1,
-        output_dir=args.output_dir,
-        beta=args.beta,
-        report_to="wandb",  # Can use Weights & Biases
-        run_name=args.wandb_name,
-        log_completions=args.log_completions,
+        use_vllm=config.training.use_vllm,
+        learning_rate=config.training.learning_rate,
+        adam_beta1=config.training.adam_beta1,
+        adam_beta2=config.training.adam_beta2,
+        weight_decay=config.training.weight_decay,
+        warmup_ratio=config.training.warmup_ratio,
+        lr_scheduler_type=config.training.lr_scheduler_type,
+        optim=config.training.optim,
+        logging_steps=config.training.logging_steps,
+        per_device_train_batch_size=config.training.batch_size,
+        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
+        num_generations=config.training.num_generations,
+        max_prompt_length=config.training.max_prompt_length,
+        max_completion_length=config.training.max_completion_length,
+        max_steps=config.training.max_steps,
+        save_steps=config.training.save_steps,
+        max_grad_norm=config.training.max_grad_norm,
+        output_dir=config.training.output_dir,
+        beta=config.training.beta,
+        report_to=config.logging.report_to,
+        run_name=config.logging.wandb_name,
+        log_completions=config.logging.log_completions,
     )
 
     # Training
@@ -263,48 +288,10 @@ def main():
     model.save_lora("grpo_saved_lora")
     
     # Optional inference testing
-    if not args.skip_inference:
+    if not config.inference.skip_inference:
         # Inference - test model without LoRA
         print("Testing model without LoRA...")
-        text = tokenizer.apply_chat_template([
-            {"role": "user", "content": "How many r's are in strawberry?"},
-        ], tokenize=False, add_generation_prompt=True)
-        
-        sampling_params = SamplingParams(
-            temperature=0.8,
-            top_p=0.95,
-            max_tokens=1024,
-        )
-        output = model.fast_generate(
-            [text],
-            sampling_params=sampling_params,
-            lora_request=None,
-        )[0].outputs[0].text
-        
-        print("Output without LoRA:")
-        print(output)
-
-        print("Testing model with LoRA...")
-        text = tokenizer.apply_chat_template([
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": "How many r's are in strawberry?"},
-        ], tokenize=False, add_generation_prompt=True)
-        
-        sampling_params = SamplingParams(
-            temperature=0.8,
-            top_p=0.95,
-            max_tokens=1024,
-        )
-        output = model.fast_generate(
-            text,
-            sampling_params=sampling_params,
-            lora_request=model.load_lora("grpo_saved_lora"),
-        )[0].outputs[0].text
-        
-        print("Output with LoRA:")
-        print(output)
-
-    print("Training and inference completed successfully!")
+        test_inference(model, tokenizer, prompt="How many r's are in strawberry?")
     
     # Optional: Save model in different formats
     # Uncomment the following lines if you want to save the model

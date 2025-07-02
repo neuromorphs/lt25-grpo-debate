@@ -1,0 +1,60 @@
+# GRPO Training Configuration for Qwen 2.5 3B
+
+# Model configuration
+model:
+  name: "Qwen/Qwen2.5-3B-Instruct"
+  max_seq_length: 1024
+  lora_rank: 64
+  gpu_memory_utilization: 0.5
+  load_in_4bit: true  # False for LoRA 16bit
+  fast_inference: true  # Enable vLLM fast inference
+  lora_target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Training configuration
+training:
+  use_vllm: true  # use vLLM for fast inference!
+  learning_rate: 5e-6
+  max_steps: 250
+  save_steps: 25
+  batch_size: 1
+  num_generations: 8
+  output_dir: "outputs"
+  beta: 0.1
+  adam_beta1: 0.9
+  adam_beta2: 0.99
+  weight_decay: 0.1
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  optim: "adamw_8bit"
+  logging_steps: 1
+  gradient_accumulation_steps: 1  # Increase to 4 for smoother training
+  max_prompt_length: 256
+  max_completion_length: 200
+  max_grad_norm: 0.1
+
+# Logging configuration
+logging:
+  report_to: "wandb"
+  wandb_project: "grpo-debate"
+  wandb_entity: "rug-minds"
+  wandb_name: "grpo-quality-questions"
+  log_completions: false
+
+# Reward configuration
+reward:
+  compare_against_reference: false
+
+# Data configuration
+data:
+  dataset_split: "train"
+
+# Inference configuration
+inference:
+  skip_inference: false 
