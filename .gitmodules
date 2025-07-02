@@ -1,0 +1,3 @@
+[submodule "3rdparty/trl"]
+	path = 3rdparty/trl
+	url = https://github.com/neuromorphs/lt25-trl.git
