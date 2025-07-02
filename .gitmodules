@@ -1,6 +1,6 @@
 [submodule "3rdparty/trl"]
 	path = 3rdparty/trl
-	url = https://github.com/huggingface/trl
+	url = https://github.com/neuromorphs/lt25-trl.git
 [submodule "3rdparty/opensource-implementation"]
 	path = 3rdparty/opensource-implementation
 	url = https://github.com/brendanhogan/DeepSeekRL-Extended.git
