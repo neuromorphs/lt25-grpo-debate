@@ -123,28 +123,46 @@ def test_reward_fn__callback(
     - prompt2: the prompt for the opponent model (inference only, frozen)
     - prompt_judge: the prompt for the judge model (inference only)
     """
-    breakpoint()
+    # breakpoint()
     # call the frozen opponent model (through the callback)
     callback = kwargs["callback"]
+    # print("prompt_llm_frozen \n", prompt_llm_frozen)
     results = callback(prompt_llm_frozen, remove_lora=False)
     opponent_completions = results["completions"]
     print(f"Opponent completions: {len(opponent_completions)=}")
     print(" First:", opponent_completions[0])
 
-    # call the judge model (through the callback)
-    # TODO: add the judge model prompt
-    debate_text = [f"""
-Debater 1 said: {debater_1_text}
-Debater 2 said: {debater_2_text}
-    """.strip()
-    for debater_1_text, debater_2_text in zip(completions, opponent_completions)
+    
+    # create judge prompts
+    debate_text = []
+    for completion, opponent_completion, trained_defend in zip(
+        completions, opponent_completions, trained_defends
+    ):
+        if trained_defend == 1:
+            debate_text.append(f"""Debater 1 said: {completion[0]['content']}
+Debater 2 said: {opponent_completion[0]['content']}""".strip())
+        else:
+            debate_text.append(f"""Debater 1 said: {opponent_completion[0]['content']}
+Debater 2 said: {completion[0]['content']}""".strip())
+            
+    prompts_judge = [
+        get_judge_input_message(
+            prompt_judge_info_i, debate_text_i
+        ) for prompt_judge_info_i, debate_text_i in zip(prompt_judge_info, debate_text)
     ]
-    prompt_judge = get_judge_input_message(prompt_judge_info, completions)
-    judge_completions = callback(prompt_judge, remove_lora=True)
-    parse_judge_response = lambda x: 0.0
-    reward = parse_judge_response(judge_completions)
-
-    return [reward for _ in completions]
+    #  call the judge model (through the callback)
+    judge_results = callback(prompts_judge, remove_lora=True)
+    breakpoint()
+    parse_judge_response = lambda trained_defend, judge_results: (
+        1.0 if str(trained_defend) == judge_results else 0.0
+    )
+    breakpoint()
+    rewards = [
+        parse_judge_response(trained_defend, judge_results["completions"][i][0]['content'])
+        for i, trained_defend in enumerate(trained_defends)
+    ]
+    breakpoint()
+    return rewards
 
 
 def main():
