@@ -4,7 +4,6 @@ GRPO (Generalized Reinforcement from Preference Optimization) Training Script
 Fine-tunes Qwen 2.5 3B Instruct model using GRPO on GSM8K dataset.
 """
 
-import unsloth
 import os
 import re
 import argparse
@@ -64,6 +63,29 @@ Respond in the following format:
 </answer>
 """
 
+XML_COT_FORMAT = """\
+<reasoning>
+{reasoning}
+</reasoning>
+<answer>
+{answer}
+</answer>
+"""
+
+
+def extract_xml_answer(text: str) -> str:
+    """Extract answer from XML format."""
+    answer = text.split("<answer>")[-1]
+    answer = answer.split("</answer>")[0]
+    return answer.strip()
+
+
+def extract_hash_answer(text: str) -> Optional[str]:
+    """Extract answer from hash format."""
+    if "####" not in text:
+        return None
+    return text.split("####")[1].strip()
+
 
 def get_gsm8k_questions(split: str = "train") -> Dataset:
     """Load and prepare GSM8K dataset."""
@@ -73,44 +95,65 @@ def get_gsm8k_questions(split: str = "train") -> Dataset:
             {'role': 'system', 'content': SYSTEM_PROMPT},
             {'role': 'user', 'content': x['question']}
         ],
+        'answer': extract_hash_answer(x['answer'])
     })
     return data
 
 
-def test_reward_fn__callback(prompts, completions, answer, **kwargs) -> List[float]:
-    """
-    If the reward function ends with __callback, then the **kwargs dictionary will contain
-    a callback function that can be called with `inputs` and `remove_lora` as args, and it
-    will return a dictionary with the following keys: 
-    - prompt_ids, prompt_mask, completion_ids, completions
+# Reward functions
+def correctness_reward_func(prompts, completions, answer, **kwargs) -> List[float]:
+    """Reward function based on correctness of the answer."""
+    responses = [completion[0]['content'] for completion in completions]
+    q = prompts[0][-1]['content']
+    extracted_responses = [extract_xml_answer(r) for r in responses]
+    # print('-'*20, f"Question:\n{q}", f"\nAnswer:\n{answer[0]}", 
+    #       f"\nResponse:\n{responses[0]}", f"\nExtracted:\n{extracted_responses[0]}")
+    return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
-    We'd like to have each row of the dataset have:
-    - prompt: the prompt for the model to be trained
-    - prompt2: the prompt for the opponent model (inference only, frozen)
-    - prompt_judge: the prompt for the judge model (inference only)
-    """
-    # model = kwargs["frozen_model"]
 
-    # call the frozen opponent model (through the callback)
-    callback = kwargs["callback"]
-    results = callback(prompts, remove_lora=False)
-    opponent_completions = results["completions"]
-    print(f"Opponent completions: {len(opponent_completions)=}")
-    print(" First:", opponent_completions[0])
+def int_reward_func(completions, **kwargs) -> List[float]:
+    """Reward function that checks if answer is a digit."""
+    responses = [completion[0]['content'] for completion in completions]
+    extracted_responses = [extract_xml_answer(r) for r in responses]
+    return [0.5 if r.isdigit() else 0.0 for r in extracted_responses]
 
-    # call the judge model (through the callback)
-    prompt_judge = ""
-    judge_completions = callback(
-        prompt_judge.format(
-            completions=completions,
-            opponent_completions=opponent_completions
-        ),
-        remove_lora=True,
-    )
-    parse_judge_response = lambda x: 0.0
-    reward = parse_judge_response(judge_completions)
 
-    return [reward for _ in completions]
+def strict_format_reward_func(completions, **kwargs) -> List[float]:
+    """Reward function that checks strict XML format."""
+    pattern = r"^<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>\n$"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, r) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
+
+
+def soft_format_reward_func(completions, **kwargs) -> List[float]:
+    """Reward function that checks soft XML format."""
+    pattern = r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, r) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
+
+
+def count_xml(text: str) -> float:
+    """Count XML tags and return reward score."""
+    count = 0.0
+    if text.count("<reasoning>\n") == 1:
+        count += 0.125
+    if text.count("\n</reasoning>\n") == 1:
+        count += 0.125
+    if text.count("\n<answer>\n") == 1:
+        count += 0.125
+        count -= len(text.split("\n</answer>\n")[-1])*0.001
+    if text.count("\n</answer>") == 1:
+        count += 0.125
+        count -= (len(text.split("\n</answer>")[-1]) - 1)*0.001
+    return count
+
+
+def xmlcount_reward_func(completions, **kwargs) -> List[float]:
+    """Reward function based on XML tag counting."""
+    contents = [completion[0]["content"] for completion in completions]
+    return [count_xml(c) for c in contents]
 
 
 def main():
@@ -173,7 +216,11 @@ def main():
         model=model,
         processing_class=tokenizer,
         reward_funcs=[
-            test_reward_fn__callback,
+            xmlcount_reward_func,
+            soft_format_reward_func,
+            strict_format_reward_func,
+            int_reward_func,
+            correctness_reward_func,
         ],
         args=training_args,
         train_dataset=dataset,
