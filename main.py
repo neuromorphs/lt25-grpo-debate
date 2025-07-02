@@ -14,7 +14,7 @@ from datasets import load_dataset, Dataset
 from vllm import SamplingParams
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import GRPOConfig, GRPOTrainer
-from data_preprocessing import load_quality, questions_to_datasets, get_debater_input_message
+from data_preprocessing import load_quality, questions_to_datasets, get_debater_input_message, get_judge_input_message
 
 
 def parse_args():
@@ -88,16 +88,12 @@ def get_quality_questions(split: str = "train") -> Dataset:
             frozen_position = 2 if trained_position == 1 else 1
             
             instance = {
-                'prompt_llm_trained': [
-                    {'role': 'user', 'content': get_debater_input_message(
-                        x['question'], x['article'], trained_position, x['answer_1'], x['answer_2']
-                    )}
-                ],
-                'prompt_llm_frozen': [
-                    {'role': 'user', 'content': get_debater_input_message(
-                        x['question'], x['article'], frozen_position, x['answer_1'], x['answer_2']
-                    )}
-                ],
+                'prompt': get_debater_input_message(
+                    x['question'], x['article'], trained_position, x['answer_1'], x['answer_2']
+                ),
+                'prompt_llm_frozen': get_debater_input_message(
+                    x['question'], x['article'], frozen_position, x['answer_1'], x['answer_2']
+                ),
                 'prompt_judge_info': {
                     'answer_1': x['answer_1'],
                     'answer_2': x['answer_2'],
@@ -113,7 +109,9 @@ def get_quality_questions(split: str = "train") -> Dataset:
     return data
 
 
-def test_reward_fn__callback(prompts, completions, answer, **kwargs) -> List[float]:
+def test_reward_fn__callback(
+    prompts, completions, prompt_llm_frozen, prompt_judge_info, trained_defends, answer, **kwargs
+) -> List[float]:
     """
     If the reward function ends with __callback, then the **kwargs dictionary will contain
     a callback function that can be called with `inputs` and `remove_lora` as args, and it
@@ -125,24 +123,24 @@ def test_reward_fn__callback(prompts, completions, answer, **kwargs) -> List[flo
     - prompt2: the prompt for the opponent model (inference only, frozen)
     - prompt_judge: the prompt for the judge model (inference only)
     """
-    # model = kwargs["frozen_model"]
-
+    breakpoint()
     # call the frozen opponent model (through the callback)
     callback = kwargs["callback"]
-    results = callback(prompts, remove_lora=False)
+    results = callback(prompt_llm_frozen, remove_lora=False)
     opponent_completions = results["completions"]
     print(f"Opponent completions: {len(opponent_completions)=}")
     print(" First:", opponent_completions[0])
 
     # call the judge model (through the callback)
-    prompt_judge = ""
-    judge_completions = callback(
-        prompt_judge.format(
-            completions=completions,
-            opponent_completions=opponent_completions
-        ),
-        remove_lora=True,
-    )
+    # TODO: add the judge model prompt
+    debate_text = [f"""
+Debater 1 said: {debater_1_text}
+Debater 2 said: {debater_2_text}
+    """.strip()
+    for debater_1_text, debater_2_text in zip(completions, opponent_completions)
+    ]
+    prompt_judge = get_judge_input_message(prompt_judge_info, completions)
+    judge_completions = callback(prompt_judge, remove_lora=True)
     parse_judge_response = lambda x: 0.0
     reward = parse_judge_response(judge_completions)
 
@@ -277,15 +275,6 @@ def main():
     # Save just LoRA adapters
     # model.save_pretrained("model")
     # tokenizer.save_pretrained("model")
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":
