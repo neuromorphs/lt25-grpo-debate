@@ -6,14 +6,12 @@ Fine-tunes Qwen 2.5 3B Instruct model using GRPO on GSM8K dataset.
 
 import unsloth
 import os
-import re
 import argparse
 import yaml
-import torch
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from datasets import load_dataset, Dataset
 from vllm import SamplingParams
-from unsloth import FastLanguageModel, is_bfloat16_supported
+from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 
 from data_preprocessing import (
@@ -41,10 +39,26 @@ class Config:
 
 
 def load_config(config_path: str = "configs/default.yaml") -> Config:
-    """Load configuration from YAML file."""
-    with open(config_path, 'r') as file:
-        config_dict = yaml.safe_load(file)
+    """Load configuration from YAML file, merging with base config."""
+    # Load base config
+    with open("configs/base.yaml", 'r') as file:
+        base_config = yaml.safe_load(file)
     
+    # Load override config
+    with open(config_path, 'r') as file:
+        override_config = yaml.safe_load(file)
+    
+    # Merge configs (override takes precedence)
+    def merge_dicts(base, override):
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = merge_dicts(result[key], value)
+            else:
+                result[key] = value
+        return result
+    
+    config_dict = merge_dicts(base_config, override_config)
     config = Config(config_dict)
     
     # Set environment variables for wandb
