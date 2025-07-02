@@ -205,3 +205,5 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+grpo_trainer_lora_model/adapter_config.json
+unsloth_compiled_cache/*

@@ -13,6 +13,7 @@ from datasets import load_dataset, Dataset
 from vllm import SamplingParams
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import GRPOConfig, GRPOTrainer
+from data_preprocessing import load_quality, questions_to_datasets, get_debater_input_message
 
 
 def parse_args():
@@ -80,7 +81,8 @@ def main():
 
     # Data preparation
     print("Loading dataset...")
-    dataset = get_gsm8k_questions(args.dataset_split)
+    # dataset = get_gsm8k_questions(args.dataset_split)
+    dataset = get_quality_questions(args.dataset_split)
 
     # Training configuration
     print("Setting up training configuration...")
@@ -230,6 +232,42 @@ def get_gsm8k_questions(split: str = "train") -> Dataset:
         ],
         'answer': extract_hash_answer(x['answer'])
     })
+    return data
+
+
+
+def get_quality_questions(split: str = "train") -> Dataset:
+    """Load and prepare QualityQuestions dataset."""
+    train_questions, test_questions = load_quality(n_questions=6)
+    dataset_dict = questions_to_datasets(train_questions, test_questions)
+    data = []
+    for x in dataset_dict[split]:
+        for trained_position in [1, 2]:
+            frozen_position = 2 if trained_position == 1 else 1
+            
+            instance = {
+                'prompt_llm_trained': [
+                    {'role': 'user', 'content': get_debater_input_message(
+                        x['question'], x['article'], trained_position, x['answer_1'], x['answer_2']
+                    )}
+                ],
+                'prompt_llm_frozen': [
+                    {'role': 'user', 'content': get_debater_input_message(
+                        x['question'], x['article'], frozen_position, x['answer_1'], x['answer_2']
+                    )}
+                ],
+                'prompt_judge_info': {
+                    'answer_1': x['answer_1'],
+                    'answer_2': x['answer_2'],
+                    'question': x['question'],
+                },
+                'answer': x['true_answer'],
+                'trained_defends': trained_position
+            }
+            data.append(instance)
+
+    # Convert back to dataset format if needed
+    data = Dataset.from_list(data)
     return data
 
 
