@@ -11,10 +11,10 @@ model:
 training:
   learning_rate: 5e-6
   max_steps: 250
-  batch_size: 1
+  batch_size: 4
   num_generations: 8
   beta: 0.1
-  gradient_accumulation_steps: 1  # Increase to 4 for smoother training
+  gradient_accumulation_steps: 2  # Increase to 4 for smoother training
   max_prompt_length: 14336
   max_completion_length: 2048
   max_grad_norm: 0.1
