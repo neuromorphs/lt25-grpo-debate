@@ -1,0 +1,30 @@
+# GRPO Training Configuration for Qwen 2.5 3B
+
+# Model configuration
+model:
+  name: "Qwen/Qwen2.5-3B-Instruct"
+  max_seq_length: 16384
+  lora_rank: 64
+  gpu_memory_utilization: 0.5
+
+# Training configuration
+training:
+  learning_rate: 5e-6
+  max_steps: 250
+  batch_size: 1
+  num_generations: 8
+  beta: 0.1
+  gradient_accumulation_steps: 1  # Increase to 4 for smoother training
+  max_prompt_length: 14336
+  max_completion_length: 2048
+  max_grad_norm: 0.1
+
+# Logging configuration
+logging:
+  report_to: "wandb"
+  wandb_name: "grpo-quality-questions"
+  log_completions: true
+
+# Reward configuration
+reward:
+  compare_against_reference: true
