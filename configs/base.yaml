@@ -22,7 +22,7 @@ model:
 # Training configuration
 training:
   use_vllm: true  # use vLLM for fast inference!
-  learning_rate: 5e-6
+  learning_rate: 5.0e-6
   max_steps: 250
   save_steps: 25
   batch_size: 1

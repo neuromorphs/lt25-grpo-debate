@@ -1,5 +1,36 @@
 from datasets import load_dataset, Dataset, DatasetDict
 
+
+DEBATER_PROMPT = """\
+You are an expert debater number `{debater_id}` engaging in a debate over answers to reading comprehension questions. You are going to debate with your interlocutor on this question : '{question}'
+Your stance in the debate is: '{pov}'
+Your interlocutor's stance is: '{interlocutor_pov}'
+Here is the reading comprehension article: '{article}'
+Don't precise the role you're going to play, start directly the debate with your oponent, and defend the your stance. Do not exceed 300 words per answer. A good rule of thumb is that a short paragraph and one quote take approximately 100 words.
+Give your answer:
+"""
+JUDGE_PROMPT_NO_DEBATE_TEXT = """\
+You are judging a debate between two persons on this question : '{question}'
+
+Point of view of debater 1 is : '{answer_1}'
+
+Point of view of debater 2 is : '{answer_2}'
+
+Which point of view seems right ? Respond by typing '1' or '2'.
+"""
+JUDGE_PROMPT_WITH_DEBATE_TEXT = """\
+You are judging a debate between two persons on this question : '{question}'
+
+Point of view of debater 1 is : '{answer_1}'
+
+Point of view of debater 2 is : '{answer_2}'
+
+Here is the debate: '{debate_text}'
+
+Given the arguments of both debaters, which point of view seems right ? Respond by typing '1' or '2'.
+"""
+
+
 class Question:
     def __init__(
         self,
@@ -199,24 +230,18 @@ def get_debater_input_message(
     else:
         raise ValueError(f"Invalid debater_id : {debater_id}, should be 1 or 2")
 
-    debater_prompt = f"""
-You are an expert debater number {
-        debater_id
-    } engaging in a debate over answers to reading
-comprehension questions. You are going to debate with your interlocutor on this question : '{
-        question
-    }'
-Your stance in the debate is: '{pov}'
-Your interlocutor's stance is: '{interlocutor_pov}'
-Here is the reading comprehension article: '{article}'
-Don't precise the role you're going to play, start directly the debate with your oponent, and defend the your stance using the following strategy:'
-        Do not exceed 300 words per answer. A good rule of thumb is that a short paragraph and one quote take approximately 100 words.'
-        Give your answer:
-    ]"""
+    debater_prompt = DEBATER_PROMPT.format(
+        debater_id=debater_id,
+        question=question,
+        pov=pov,
+        interlocutor_pov=interlocutor_pov,
+        article=article,
+    )
 
     message = [{"role": "user", "content": debater_prompt}]
 
     return message
+
 
 def get_judge_input_message(debate_history_data: dict, debate_text: str):
     """Generate the input message for the judge
@@ -227,26 +252,54 @@ def get_judge_input_message(debate_history_data: dict, debate_text: str):
     """
     # if no debate text, judge only has the question and the point of views
     if not debate_text:
-        judge_prompt_sentences = [
-            f"You are judging this question : '{debate_history_data['question']}'",
-            f"Point of view 1 is : '{debate_history_data['answer_1']}'",
-            f"Point of view 2 is : '{debate_history_data['answer_2']}'",
-            "Which point of view seems right ? Respond by typing '1' or '2'.",
-        ]
+        judge_prompt_sentences = JUDGE_PROMPT_NO_DEBATE_TEXT.format(
+            question=debate_history_data['question'],
+            answer_1=debate_history_data['answer_1'],
+            answer_2=debate_history_data['answer_2'],
+        )
     # if debate text, judge has the full debate
     else:
-        judge_prompt_sentences = [
-            f"You are judging a debate between two persons on this question : '{debate_history_data['question']}'",
-            f"Point of view of debater 1 is : '{debate_history_data['answer_1']}'",
-            f"Point of view of debater 2 is : '{debate_history_data['answer_2']}'",
-            f"Here is the debate: '{debate_text}'",
-            "Given the arguments of both debaters, which point of view seems right ? Respond by typing '1' or '2'.",
-        ]
+        judge_prompt_sentences = JUDGE_PROMPT_WITH_DEBATE_TEXT.format(
+            question=debate_history_data['question'],
+            answer_1=debate_history_data['answer_1'],
+            answer_2=debate_history_data['answer_2'],
+            debate_text=debate_text,
+        )
 
-    judge_prompt_sentences = [
-        sentence for sentence in judge_prompt_sentences if sentence
-    ]
-    judge_prompt_sentences = "\n\n".join(judge_prompt_sentences)
     message = [{"role": "user", "content": judge_prompt_sentences}]
-
     return message
+
+
+def get_quality_questions(split: str = "train") -> Dataset:
+    """Load and prepare QualityQuestions dataset."""
+    train_questions, test_questions = load_quality(n_questions=6)
+    dataset_dict = questions_to_datasets(train_questions, test_questions)
+    data = []
+    for x in dataset_dict[split]:
+        for trained_position in [1, 2]:
+            frozen_position = 2 if trained_position == 1 else 1
+            instance = {
+                'prompt': get_debater_input_message(
+                    x['question'], x['article'], trained_position, x['answer_1'], x['answer_2']
+                ),
+                'prompt_llm_frozen': get_debater_input_message(
+                    x['question'], x['article'], frozen_position, x['answer_1'], x['answer_2']
+                ),
+                'prompt_judge_info': {
+                    'answer_1': x['answer_1'],
+                    'answer_2': x['answer_2'],
+                    'question': x['question'],
+                },
+                "prompt_judge_without_debate": get_judge_input_message(x, None),
+                'answer': x['true_answer'],
+                'trained_defends': trained_position
+            }
+            data.append(instance)
+
+    # Convert back to dataset format if needed
+    data = Dataset.from_list(data)
+    return data
+
+
+if __name__ == "__main__":
+    data = get_quality_questions(split="train")

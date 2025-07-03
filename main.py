@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-GRPO (Generalized Reinforcement from Preference Optimization) Training Script
-Fine-tunes Qwen 2.5 3B Instruct model using GRPO on GSM8K dataset.
+GRPO (Generalized Reinforcement from Preference Optimization) Training Script.
 """
 
 import unsloth
@@ -9,15 +8,12 @@ import os
 import argparse
 import yaml
 from typing import List, Dict, Any
-from datasets import load_dataset, Dataset
 from vllm import SamplingParams
 from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 
 from data_preprocessing import (
-    load_quality,
-    questions_to_datasets,
-    get_debater_input_message,
+    get_quality_questions,
     get_judge_input_message,
 )
 
@@ -69,6 +65,9 @@ def load_config(config_path: str = "configs/default.yaml") -> Config:
         print(f"Setting WANDB_PROJECT to {config.logging.wandb_project}")
         os.environ["WANDB_PROJECT"] = config.logging.wandb_project
     
+    # print config in yaml format
+    print(yaml.dump(config_dict, indent=2))
+    
     return config
 
 
@@ -78,61 +77,6 @@ def parse_args():
     parser.add_argument("--config", default="configs/default.yaml",
                        help="Path to configuration YAML file")
     return parser.parse_args()
-
-
-# Constants and helper functions
-SYSTEM_PROMPT = """
-Respond in the following format:
-<reasoning>
-...
-</reasoning>
-<answer>
-...
-</answer>
-"""
-
-
-def get_gsm8k_questions(split: str = "train") -> Dataset:
-    """Load and prepare GSM8K dataset."""
-    data = load_dataset('openai/gsm8k', 'main')[split]
-    data = data.map(lambda x: {
-        'prompt': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': x['question']}
-        ],
-    })
-    return data
-
-
-def get_quality_questions(split: str = "train") -> Dataset:
-    """Load and prepare QualityQuestions dataset."""
-    train_questions, test_questions = load_quality(n_questions=6)
-    dataset_dict = questions_to_datasets(train_questions, test_questions)
-    data = []
-    for x in dataset_dict[split]:
-        for trained_position in [1, 2]:
-            frozen_position = 2 if trained_position == 1 else 1
-            
-            instance = {
-                'prompt': get_debater_input_message(
-                    x['question'], x['article'], trained_position, x['answer_1'], x['answer_2']
-                ),
-                'prompt_llm_frozen': get_debater_input_message(
-                    x['question'], x['article'], frozen_position, x['answer_1'], x['answer_2']
-                ),
-                'prompt_judge_info': {
-                    'answer_1': x['answer_1'],
-                    'answer_2': x['answer_2'],
-                    'question': x['question'],
-                },
-                'answer': x['true_answer'],
-                'trained_defends': trained_position
-            }
-            data.append(instance)
-
-    # Convert back to dataset format if needed
-    data = Dataset.from_list(data)
-    return data
 
 
 def test_reward_fn__callback(
@@ -208,8 +152,7 @@ def test_inference(model, tokenizer, prompt: str = "How many r's are in strawber
 
     print("Testing model with LoRA...")
     text = tokenizer.apply_chat_template([
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": "How many r's are in strawberry?"},
+        {"role": "user", "content": prompt},
     ], tokenize=False, add_generation_prompt=True)
     
     sampling_params = SamplingParams(
@@ -226,6 +169,27 @@ def test_inference(model, tokenizer, prompt: str = "How many r's are in strawber
     print("Output with LoRA:")
     print(output)
     return output
+
+
+def print_dataset_stats(dataset, tokenizer):
+    print(f"Dataset size: {len(dataset)}")
+    def get_seqlen(x, col):
+        tokens = tokenizer.apply_chat_template(
+            x[col], tokenize=False, add_generation_prompt=True,
+        )
+        return len(tokens)
+    for col in ['prompt', 'prompt_llm_frozen', 'prompt_judge_without_debate']:
+        dataset = dataset.map(lambda x: {f"{col}_seqlen": get_seqlen(x, col)})
+    print(dataset.column_names)
+    x = dataset['prompt_seqlen']
+    print(f"prompt_seqlen: {x}")
+    print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
+    x = dataset['prompt_llm_frozen_seqlen']
+    print(f"prompt_llm_frozen_seqlen: {x}")
+    print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
+    x = dataset['prompt_judge_without_debate_seqlen']
+    print(f"prompt_judge_without_debate_seqlen: {x}")
+    print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
 
 
 def main():
@@ -256,27 +220,33 @@ def main():
     # Data preparation
     print("Loading dataset...")
     dataset = get_quality_questions(config.data.dataset_split)
+    print_dataset_stats(dataset, tokenizer)
 
     # Training configuration
     print("Setting up training configuration...")
     training_args = GRPOConfig(
         use_vllm=config.training.use_vllm,
-        learning_rate=config.training.learning_rate,
+        max_steps=config.training.max_steps,
+        # optimizer
+        optim=config.training.optim,
+        learning_rate=float(config.training.learning_rate),
+        lr_scheduler_type=config.training.lr_scheduler_type,
         adam_beta1=config.training.adam_beta1,
         adam_beta2=config.training.adam_beta2,
         weight_decay=config.training.weight_decay,
         warmup_ratio=config.training.warmup_ratio,
-        lr_scheduler_type=config.training.lr_scheduler_type,
-        optim=config.training.optim,
-        logging_steps=config.training.logging_steps,
+        max_grad_norm=config.training.max_grad_norm,
+        # batchsize
         per_device_train_batch_size=config.training.batch_size,
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
+        # group size
         num_generations=config.training.num_generations,
+        # sequence length
         max_prompt_length=config.training.max_prompt_length,
         max_completion_length=config.training.max_completion_length,
-        max_steps=config.training.max_steps,
+        # logging
         save_steps=config.training.save_steps,
-        max_grad_norm=config.training.max_grad_norm,
+        logging_steps=config.training.logging_steps,
         output_dir=config.training.output_dir,
         beta=config.training.beta,
         report_to=config.logging.report_to,
