@@ -43,6 +43,7 @@ def test_inference(model, tokenizer, prompt: str = "How many r's are in strawber
 
 def print_dataset_stats(dataset, tokenizer):
     print(f"Dataset size: {len(dataset)}")
+    print(f"Dataset shape: {dataset.shape}")
     def get_seqlen(x, col):
         tokens = tokenizer.apply_chat_template(
             x[col], tokenize=False, add_generation_prompt=True,

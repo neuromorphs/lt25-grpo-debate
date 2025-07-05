@@ -101,9 +101,10 @@ def evaluate_judge_response(response: str) -> Optional[int]:
         return None
 
 
-def build_debate_hf_datasets() -> Tuple[Dataset, Dataset]:
+def build_debate_hf_datasets(test_size: float = 0.16) -> Tuple[Dataset, Dataset]:
     """
     Build Hugging Face datasets for debate topics.
+    By default, 84 train examples and 16 test examples are created.
     
     Returns:
         Tuple of (train_dataset, test_dataset)
@@ -164,7 +165,7 @@ def build_debate_hf_datasets() -> Tuple[Dataset, Dataset]:
     
     # Split into train/test sets (85/15 split)
     total_topics = len(topics)
-    test_size = int(total_topics * 0.15)
+    test_size = int(total_topics * test_size)
     
     # Generate random indices for test set
     test_indices = random.sample(range(total_topics), test_size)
@@ -183,3 +184,9 @@ def build_debate_hf_datasets() -> Tuple[Dataset, Dataset]:
     test_dataset = Dataset.from_list(test_examples)
     
     return train_dataset, test_dataset
+
+
+if __name__ == "__main__":
+    train_dataset, test_dataset = build_debate_hf_datasets()
+    print(train_dataset.shape)
+    print(test_dataset.shape)

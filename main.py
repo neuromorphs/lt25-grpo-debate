@@ -189,7 +189,7 @@ def main():
             "train_dataset": dataset,
         }
     elif config.data.dataset_name == "small_debate_dataset":
-        train_dataset, test_dataset = build_debate_hf_datasets()  # ignore test dataset
+        train_dataset, test_dataset = build_debate_hf_datasets(test_size=config.data.test_size)
         print_dataset_stats(train_dataset, tokenizer)
         reward_fn__callback = make_reward_fn(config)
         reward_funcs = [
@@ -202,8 +202,6 @@ def main():
         }
     else:
         raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
-
-    breakpoint()
 
     # Training configuration
     print("Setting up training configuration...")
