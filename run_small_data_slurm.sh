@@ -9,4 +9,4 @@
 #SBATCH --mail-user=s.abreu@rug.nl
 
 source .venv/bin/activate
-python main.py --config configs/fullseq.yaml
+python main.py --config configs/fullseq_smalldata.yaml
