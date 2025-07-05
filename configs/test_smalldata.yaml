@@ -2,6 +2,7 @@
 
 data:
   dataset_name: "small_debate_dataset"  # "quality_questions"
+  test_size: 0.16
 
 # Model configuration
 model:
