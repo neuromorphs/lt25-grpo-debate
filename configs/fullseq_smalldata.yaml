@@ -25,7 +25,7 @@ training:
 # Logging configuration
 logging:
   report_to: "wandb"
-  wandb_name: "grpo-quality-questions"
+  wandb_name: "grpo-small-debate"
   log_completions: true
 
 # Reward configuration
