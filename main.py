@@ -16,6 +16,7 @@ from data_preprocessing import (
     get_quality_questions,
     get_judge_input_message,
 )
+from data_small import build_debate_hf_datasets, evaluate_judge_response
 
 
 class Config:
@@ -131,6 +132,48 @@ Debater 2 said: {completion[0]['content']}""".strip())
     return rewards
 
 
+def test_reward_fn_small_dataset__callback(
+    prompts, completions, prompt_opponent, judge_prompt_template, topic, **kwargs
+) -> List[float]:
+    """
+    If the reward function ends with __callback, then the **kwargs dictionary will contain
+    a callback function that can be called with `inputs` and `remove_lora` as args, and it
+    will return a dictionary with the following keys: 
+    - prompt_ids, prompt_mask, completion_ids, completions
+
+    We'd like to have each row of the dataset have:
+    - prompt: the prompt for the model to be trained
+    - prompt2: the prompt for the opponent model (inference only, frozen)
+    - prompt_judge: the prompt for the judge model (inference only)
+    """
+    # call the frozen opponent model (through the callback)
+    callback = kwargs["callback"]
+    results = callback(prompt_opponent, remove_lora=True)
+    opponent_completions = results["completions"]
+    print(f"Opponent completions: {len(opponent_completions)=}")
+
+    # create judge prompts
+    judge_prompts = []
+    for completion_i, opponent_completion_i, topic_i in zip(
+        completions, opponent_completions, topic
+    ):
+        x = judge_prompt_template[0]
+        x[-1]["content"] = x[-1]["content"].format(
+            topic=topic_i,
+            arg1_response=completion_i[0]['content'],
+            arg2_response=opponent_completion_i[0]['content']
+        )
+        judge_prompts.append(x)
+
+    # call the judge model (through the callback)
+    judge_results = callback(judge_prompts, remove_lora=True)
+    rewards = [
+        1.0 if evaluate_judge_response(judge_completion_i[-1]['content']) is True else 0.0
+        for judge_completion_i in judge_results["completions"]
+    ]
+    return rewards
+
+
 def test_inference(model, tokenizer, prompt: str = "How many r's are in strawberry?"):
     text = tokenizer.apply_chat_template([
         {"role": "user", "content": prompt},
@@ -178,18 +221,17 @@ def print_dataset_stats(dataset, tokenizer):
             x[col], tokenize=False, add_generation_prompt=True,
         )
         return len(tokens)
-    for col in ['prompt', 'prompt_llm_frozen', 'prompt_judge_without_debate']:
+    if "prompt_judge_without_debate" in dataset.column_names:
+        cols = ['prompt', 'prompt_llm_frozen', 'prompt_judge_without_debate']
+    else:
+        cols = ["prompt"]
+    for col in cols:
         dataset = dataset.map(lambda x: {f"{col}_seqlen": get_seqlen(x, col)})
     print(dataset.column_names)
-    x = dataset['prompt_seqlen']
-    print(f"prompt_seqlen: {x}")
-    print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
-    x = dataset['prompt_llm_frozen_seqlen']
-    print(f"prompt_llm_frozen_seqlen: {x}")
-    print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
-    x = dataset['prompt_judge_without_debate_seqlen']
-    print(f"prompt_judge_without_debate_seqlen: {x}")
-    print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
+    for col in cols:
+        x = dataset[f"{col}_seqlen"]
+        print(f"{col}_seqlen: {x}")
+        print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
 
 
 def main():
@@ -219,8 +261,19 @@ def main():
 
     # Data preparation
     print("Loading dataset...")
-    dataset = get_quality_questions(config.data.dataset_split)
-    print_dataset_stats(dataset, tokenizer)
+    if config.data.dataset_name == "quality_questions":
+        dataset = get_quality_questions(config.data.dataset_split)
+        print_dataset_stats(dataset, tokenizer)
+        reward_funcs = [
+            test_reward_fn__callback,
+        ]
+    elif config.data.dataset_name == "small_debate_dataset":
+        dataset = build_debate_hf_datasets()
+        reward_funcs = [
+            test_reward_fn_small_dataset__callback,
+        ]
+    else:
+        raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
 
     # Training configuration
     print("Setting up training configuration...")
@@ -259,9 +312,7 @@ def main():
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[
-            test_reward_fn__callback,
-        ],
+        reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset,
     )
