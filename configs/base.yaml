@@ -2,6 +2,10 @@
 # This file contains all possible configuration options with sensible defaults
 # Override specific values in experiment-specific configs or via environment variables
 
+# Data configuration
+data:
+  dataset_name: "quality_questions"
+
 # Model configuration
 model:
   name: "Qwen/Qwen2.5-3B-Instruct"
