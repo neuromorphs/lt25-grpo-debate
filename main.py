@@ -10,11 +10,11 @@ from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 
 from config import Config, load_config
-from datasets.quality_questions import (
+from dataloaders.quality_questions import (
     get_quality_questions,
     get_judge_input_message,
 )
-from datasets.small_debate import (
+from dataloaders.small_debate import (
     build_debate_hf_datasets,
     evaluate_judge_response,
 )
