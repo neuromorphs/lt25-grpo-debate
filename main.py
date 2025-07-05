@@ -203,6 +203,8 @@ def main():
     else:
         raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
 
+    breakpoint()
+
     # Training configuration
     print("Setting up training configuration...")
     training_args = GRPOConfig(
