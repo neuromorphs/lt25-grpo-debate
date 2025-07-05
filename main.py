@@ -185,14 +185,21 @@ def main():
         reward_funcs = [
             reward_fn__callback,
         ]
+        trainer_dataset_kwargs = {
+            "train_dataset": dataset,
+        }
     elif config.data.dataset_name == "small_debate_dataset":
-        dataset, _ = build_debate_hf_datasets()  # ignore test dataset
-        print_dataset_stats(dataset, tokenizer)
+        train_dataset, test_dataset = build_debate_hf_datasets()  # ignore test dataset
+        print_dataset_stats(train_dataset, tokenizer)
         reward_fn__callback = make_reward_fn(config)
         reward_funcs = [
             reward_fn__callback,
             make_length_reward_fn(config),
         ]
+        trainer_dataset_kwargs = {
+            "train_dataset": train_dataset,
+            "eval_dataset": test_dataset,
+        }
     else:
         raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
 
@@ -218,6 +225,10 @@ def main():
         # sequence length
         max_prompt_length=config.training.max_prompt_length,
         max_completion_length=config.training.max_completion_length,
+        # eval
+        per_device_eval_batch_size=config.eval.batch_size,
+        eval_strategy=config.eval.eval_strategy,
+        eval_steps=config.eval.eval_steps,
         # logging
         save_steps=config.training.save_steps,
         logging_steps=config.training.logging_steps,
@@ -235,7 +246,7 @@ def main():
         processing_class=tokenizer,
         reward_funcs=reward_funcs,
         args=training_args,
-        train_dataset=dataset,
+        **trainer_dataset_kwargs,
     )
     trainer.train()
 

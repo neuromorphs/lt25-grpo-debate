@@ -22,6 +22,11 @@ training:
   max_completion_length: 4096
   max_grad_norm: 0.1
 
+eval:
+  batch_size: 16
+  eval_strategy: "steps"
+  eval_steps: 10
+
 # Logging configuration
 logging:
   report_to: "wandb"

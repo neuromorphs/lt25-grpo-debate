@@ -46,6 +46,12 @@ training:
   max_completion_length: 200
   max_grad_norm: 0.1
 
+# Evaluation configuration
+eval:
+  batch_size: 2
+  eval_strategy: "no"
+  eval_steps: null
+
 # Logging configuration
 logging:
   report_to: "none"
