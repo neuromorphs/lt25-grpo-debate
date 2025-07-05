@@ -84,7 +84,7 @@ def make_length_reward_fn(max_length: int) -> Callable[[List[str]], List[float]]
     """
     Make a reward function that rewards the model for generating a response that is shorter than a given length.
     """
-    def length_reward_fn(completions: List[str]) -> List[float]:
+    def length_reward_fn(prompts: List[Any], completions: List[Any], **kwargs) -> List[float]:
         return [
             1.0 if len(completion) <= max_length else 1.0 - (len(completion) - max_length) / max_length
             for completion in completions
