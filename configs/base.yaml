@@ -5,6 +5,7 @@
 # Data configuration
 data:
   dataset_name: "quality_questions"
+  dataset_split: "train"
 
 # Model configuration
 model:
@@ -56,10 +57,6 @@ logging:
 # Reward configuration
 reward:
   compare_against_reference: false
-
-# Data configuration
-data:
-  dataset_split: "train"
 
 # Inference configuration
 inference:
