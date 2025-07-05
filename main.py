@@ -29,15 +29,18 @@ def parse_args():
     return parser.parse_args()
 
 
-def make_length_reward_fn(max_length: int) -> Callable[[List[str]], List[float]]:
+def make_length_reward_fn(config: Config) -> Callable[[List[str]], List[float]]:
     """
     Make a reward function that rewards the model for generating a response that is shorter than a given length.
     """
     def length_reward_fn(prompts: List[Any], completions: List[Any], **kwargs) -> List[float]:
-        return [
-            1.0 if len(completion) <= max_length else 1.0 - (len(completion) - max_length) / max_length
+        maxlen = config.reward.max_completion_length
+        rewards = [
+            1.0 if len(completion) <= maxlen else 1.0 - (len(completion) - maxlen) / maxlen
             for completion in completions
         ]
+        rewards = [r * config.reward.length_reward_weight for r in rewards]
+        return rewards
     return length_reward_fn
 
 
@@ -187,7 +190,7 @@ def main():
         reward_fn__callback = make_reward_fn(config)
         reward_funcs = [
             reward_fn__callback,
-            make_length_reward_fn(config.reward.max_completion_length),
+            make_length_reward_fn(config),
         ]
     else:
         raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
