@@ -5,6 +5,7 @@ grpo_trainer_lora_model
 outputs
 .vscode
 wandb
+slurm-*.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
