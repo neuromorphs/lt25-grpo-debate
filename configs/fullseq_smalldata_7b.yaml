@@ -5,7 +5,7 @@ data:
 
 # Model configuration
 model:
-  name: "Qwen/Qwen2.5-3B-Instruct"
+  name: "Qwen/Qwen2.5-7B-Instruct"
   max_seq_length: 6144
   lora_rank: 64
   gpu_memory_utilization: 0.5
