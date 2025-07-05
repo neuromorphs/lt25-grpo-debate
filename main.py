@@ -239,6 +239,7 @@ def main():
         report_to=config.logging.report_to,
         run_name=config.logging.wandb_name,
         log_completions=config.logging.log_completions,
+        num_completions_to_print=config.logging.num_completions_to_print,
     )
 
     # Training

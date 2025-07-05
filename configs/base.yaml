@@ -59,6 +59,7 @@ logging:
   wandb_entity: "rug-minds"
   wandb_name: "grpo-quality-questions"
   log_completions: false
+  num_completions_to_print: 0
 
 # Reward configuration
 reward:
