@@ -269,6 +269,7 @@ def main():
         ]
     elif config.data.dataset_name == "small_debate_dataset":
         dataset, _ = build_debate_hf_datasets()  # ignore test dataset
+        print_dataset_stats(dataset, tokenizer)
         reward_funcs = [
             test_reward_fn_small_dataset__callback,
         ]
