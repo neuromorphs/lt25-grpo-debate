@@ -6,7 +6,6 @@ GRPO (Generalized Reinforcement from Preference Optimization) Training Script.
 import unsloth
 import argparse
 from typing import List, Any, Callable
-from vllm import SamplingParams
 from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 
@@ -19,7 +18,7 @@ from datasets.small_debate import (
     build_debate_hf_datasets,
     evaluate_judge_response,
 )
-from utils import test_inference
+from utils import test_inference, print_dataset_stats
 
 
 def parse_args():
@@ -146,26 +145,6 @@ def make_reward_fn(config: Config) -> Callable[[List[str]], List[float]]:
         return test_reward_fn_small_dataset__callback
     else:
         raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
-
-
-def print_dataset_stats(dataset, tokenizer):
-    print(f"Dataset size: {len(dataset)}")
-    def get_seqlen(x, col):
-        tokens = tokenizer.apply_chat_template(
-            x[col], tokenize=False, add_generation_prompt=True,
-        )
-        return len(tokens)
-    if "prompt_judge_without_debate" in dataset.column_names:
-        cols = ['prompt', 'prompt_llm_frozen', 'prompt_judge_without_debate']
-    else:
-        cols = ["prompt"]
-    for col in cols:
-        dataset = dataset.map(lambda x: {f"{col}_seqlen": get_seqlen(x, col)})
-    print(dataset.column_names)
-    for col in cols:
-        x = dataset[f"{col}_seqlen"]
-        print(f"{col}_seqlen: {x}")
-        print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
 
 
 def main():

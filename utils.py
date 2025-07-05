@@ -39,3 +39,23 @@ def test_inference(model, tokenizer, prompt: str = "How many r's are in strawber
     print("Output with LoRA:")
     print(output)
     return output
+
+
+def print_dataset_stats(dataset, tokenizer):
+    print(f"Dataset size: {len(dataset)}")
+    def get_seqlen(x, col):
+        tokens = tokenizer.apply_chat_template(
+            x[col], tokenize=False, add_generation_prompt=True,
+        )
+        return len(tokens)
+    if "prompt_judge_without_debate" in dataset.column_names:
+        cols = ['prompt', 'prompt_llm_frozen', 'prompt_judge_without_debate']
+    else:
+        cols = ["prompt"]
+    for col in cols:
+        dataset = dataset.map(lambda x: {f"{col}_seqlen": get_seqlen(x, col)})
+    print(dataset.column_names)
+    for col in cols:
+        x = dataset[f"{col}_seqlen"]
+        print(f"{col}_seqlen: {x}")
+        print(f"  min: {min(x)}, max: {max(x)}, mean: {sum(x) / len(x):.1f}")
