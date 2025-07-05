@@ -7,7 +7,7 @@ import unsloth
 import os
 import argparse
 import yaml
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable
 from vllm import SamplingParams
 from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
@@ -80,98 +80,122 @@ def parse_args():
     return parser.parse_args()
 
 
-def test_reward_fn__callback(
-    prompts, completions, prompt_llm_frozen, prompt_judge_info, trained_defends, answer, **kwargs
-) -> List[float]:
+def make_length_reward_fn(max_length: int) -> Callable[[List[str]], List[float]]:
     """
-    If the reward function ends with __callback, then the **kwargs dictionary will contain
-    a callback function that can be called with `inputs` and `remove_lora` as args, and it
-    will return a dictionary with the following keys: 
-    - prompt_ids, prompt_mask, completion_ids, completions
-
-    We'd like to have each row of the dataset have:
-    - prompt: the prompt for the model to be trained
-    - prompt2: the prompt for the opponent model (inference only, frozen)
-    - prompt_judge: the prompt for the judge model (inference only)
+    Make a reward function that rewards the model for generating a response that is shorter than a given length.
     """
-    # call the frozen opponent model (through the callback)
-    callback = kwargs["callback"]
-    # print("prompt_llm_frozen \n", prompt_llm_frozen)
-    results = callback(prompt_llm_frozen, remove_lora=False)
-    opponent_completions = results["completions"]
-    print(f"Opponent completions: {len(opponent_completions)=}")
-    print(" First:", opponent_completions[0])
+    def length_reward_fn(completions: List[str]) -> List[float]:
+        return [
+            1.0 if len(completion) <= max_length else 1.0 - (len(completion) - max_length) / max_length
+            for completion in completions
+        ]
+    return length_reward_fn
 
+
+def make_reward_fn(config: Config) -> Callable[[List[str]], List[float]]:
+    """
+    Make a reward function for either the quality questions dataset or the small debate dataset.
+    """
+
+    def test_reward_fn_small_dataset__callback(
+        prompts, completions, prompt_opponent, judge_prompt_template, topic, **kwargs
+    ) -> List[float]:
+        """
+        If the reward function ends with __callback, then the **kwargs dictionary will contain
+        a callback function that can be called with `inputs` and `remove_lora` as args, and it
+        will return a dictionary with the following keys: 
+        - prompt_ids, prompt_mask, completion_ids, completions
+
+        We'd like to have each row of the dataset have:
+        - prompt: the prompt for the model to be trained
+        - prompt2: the prompt for the opponent model (inference only, frozen)
+        - prompt_judge: the prompt for the judge model (inference only)
+        """
+        # call the frozen opponent model (through the callback)
+        callback = kwargs["callback"]
+        remove_lora = config.reward.compare_against_reference
+        results = callback(prompt_opponent, remove_lora=remove_lora)
+        opponent_completions = results["completions"]
+        print(f"Opponent completions: {len(opponent_completions)=}")
+
+        # create judge prompts
+        judge_prompts = []
+        for completion_i, opponent_completion_i, topic_i in zip(
+            completions, opponent_completions, topic
+        ):
+            x = judge_prompt_template[0]
+            x[-1]["content"] = x[-1]["content"].format(
+                topic=topic_i,
+                arg1_response=completion_i[0]['content'],
+                arg2_response=opponent_completion_i[0]['content']
+            )
+            judge_prompts.append(x)
+
+        # call the judge model (through the callback)
+        judge_results = callback(judge_prompts, remove_lora=True)
+        rewards = [
+            1.0 if evaluate_judge_response(judge_completion_i[-1]['content']) is True else 0.0
+            for judge_completion_i in judge_results["completions"]
+        ]
+        return rewards
     
-    # create judge prompts
-    debate_text = []
-    for completion, opponent_completion, trained_defend in zip(
-        completions, opponent_completions, trained_defends
-    ):
-        if trained_defend == 1:
-            debate_text.append(f"""Debater 1 said: {completion[0]['content']}
-Debater 2 said: {opponent_completion[0]['content']}""".strip())
-        else:
-            debate_text.append(f"""Debater 1 said: {opponent_completion[0]['content']}
-Debater 2 said: {completion[0]['content']}""".strip())
-            
-    prompts_judge = [
-        get_judge_input_message(
-            prompt_judge_info_i, debate_text_i
-        ) for prompt_judge_info_i, debate_text_i in zip(prompt_judge_info, debate_text)
-    ]
-    #  call the judge model (through the callback)
-    judge_results = callback(prompts_judge, remove_lora=True)
-    parse_judge_response = lambda trained_defend, judge_results: (
-        1.0 if str(trained_defend) == judge_results else 0.0
-    )
-    rewards = [
-        parse_judge_response(trained_defend, judge_results["completions"][i][0]['content'])
-        for i, trained_defend in enumerate(trained_defends)
-    ]
-    return rewards
+    def test_reward_fn__callback(
+        prompts, completions, prompt_llm_frozen, prompt_judge_info, trained_defends, answer, **kwargs
+    ) -> List[float]:
+        """
+        If the reward function ends with __callback, then the **kwargs dictionary will contain
+        a callback function that can be called with `inputs` and `remove_lora` as args, and it
+        will return a dictionary with the following keys: 
+        - prompt_ids, prompt_mask, completion_ids, completions
 
+        We'd like to have each row of the dataset have:
+        - prompt: the prompt for the model to be trained
+        - prompt2: the prompt for the opponent model (inference only, frozen)
+        - prompt_judge: the prompt for the judge model (inference only)
+        """
+        # call the frozen opponent model (through the callback)
+        callback = kwargs["callback"]
+        # print("prompt_llm_frozen \n", prompt_llm_frozen)
+        results = callback(prompt_llm_frozen, remove_lora=False)
+        opponent_completions = results["completions"]
+        print(f"Opponent completions: {len(opponent_completions)=}")
+        print(" First:", opponent_completions[0])
 
-def test_reward_fn_small_dataset__callback(
-    prompts, completions, prompt_opponent, judge_prompt_template, topic, **kwargs
-) -> List[float]:
-    """
-    If the reward function ends with __callback, then the **kwargs dictionary will contain
-    a callback function that can be called with `inputs` and `remove_lora` as args, and it
-    will return a dictionary with the following keys: 
-    - prompt_ids, prompt_mask, completion_ids, completions
-
-    We'd like to have each row of the dataset have:
-    - prompt: the prompt for the model to be trained
-    - prompt2: the prompt for the opponent model (inference only, frozen)
-    - prompt_judge: the prompt for the judge model (inference only)
-    """
-    # call the frozen opponent model (through the callback)
-    callback = kwargs["callback"]
-    results = callback(prompt_opponent, remove_lora=True)
-    opponent_completions = results["completions"]
-    print(f"Opponent completions: {len(opponent_completions)=}")
-
-    # create judge prompts
-    judge_prompts = []
-    for completion_i, opponent_completion_i, topic_i in zip(
-        completions, opponent_completions, topic
-    ):
-        x = judge_prompt_template[0]
-        x[-1]["content"] = x[-1]["content"].format(
-            topic=topic_i,
-            arg1_response=completion_i[0]['content'],
-            arg2_response=opponent_completion_i[0]['content']
+        
+        # create judge prompts
+        debate_text = []
+        for completion, opponent_completion, trained_defend in zip(
+            completions, opponent_completions, trained_defends
+        ):
+            if trained_defend == 1:
+                debate_text.append(f"""Debater 1 said: {completion[0]['content']}
+    Debater 2 said: {opponent_completion[0]['content']}""".strip())
+            else:
+                debate_text.append(f"""Debater 1 said: {opponent_completion[0]['content']}
+    Debater 2 said: {completion[0]['content']}""".strip())
+                
+        prompts_judge = [
+            get_judge_input_message(
+                prompt_judge_info_i, debate_text_i
+            ) for prompt_judge_info_i, debate_text_i in zip(prompt_judge_info, debate_text)
+        ]
+        #  call the judge model (through the callback)
+        judge_results = callback(prompts_judge, remove_lora=True)
+        parse_judge_response = lambda trained_defend, judge_results: (
+            1.0 if str(trained_defend) == judge_results else 0.0
         )
-        judge_prompts.append(x)
+        rewards = [
+            parse_judge_response(trained_defend, judge_results["completions"][i][0]['content'])
+            for i, trained_defend in enumerate(trained_defends)
+        ]
+        return rewards
 
-    # call the judge model (through the callback)
-    judge_results = callback(judge_prompts, remove_lora=True)
-    rewards = [
-        1.0 if evaluate_judge_response(judge_completion_i[-1]['content']) is True else 0.0
-        for judge_completion_i in judge_results["completions"]
-    ]
-    return rewards
+    if config.data.dataset_name == "quality_questions":
+        return test_reward_fn__callback
+    elif config.data.dataset_name == "small_debate_dataset":
+        return test_reward_fn_small_dataset__callback
+    else:
+        raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")
 
 
 def test_inference(model, tokenizer, prompt: str = "How many r's are in strawberry?"):
@@ -264,14 +288,17 @@ def main():
     if config.data.dataset_name == "quality_questions":
         dataset = get_quality_questions(config.data.dataset_split)
         print_dataset_stats(dataset, tokenizer)
+        reward_fn__callback = make_reward_fn(config)
         reward_funcs = [
-            test_reward_fn__callback,
+            reward_fn__callback,
         ]
     elif config.data.dataset_name == "small_debate_dataset":
         dataset, _ = build_debate_hf_datasets()  # ignore test dataset
         print_dataset_stats(dataset, tokenizer)
+        reward_fn__callback = make_reward_fn(config)
         reward_funcs = [
-            test_reward_fn_small_dataset__callback,
+            reward_fn__callback,
+            make_length_reward_fn(config.reward.max_completion_length),
         ]
     else:
         raise ValueError(f"Invalid dataset name: {config.data.dataset_name}")

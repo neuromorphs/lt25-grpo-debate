@@ -6,7 +6,7 @@ data:
 # Model configuration
 model:
   name: "Qwen/Qwen2.5-3B-Instruct"
-  max_seq_length: 16384
+  max_seq_length: 6144
   lora_rank: 64
   gpu_memory_utilization: 0.5
 
@@ -14,12 +14,12 @@ model:
 training:
   learning_rate: 5e-6
   max_steps: 250
-  batch_size: 4
+  batch_size: 10
   num_generations: 8
   beta: 0.1
   gradient_accumulation_steps: 2  # Increase to 4 for smoother training
-  max_prompt_length: 14336
-  max_completion_length: 2048
+  max_prompt_length: 2048
+  max_completion_length: 4096
   max_grad_norm: 0.1
 
 # Logging configuration
@@ -31,3 +31,4 @@ logging:
 # Reward configuration
 reward:
   compare_against_reference: true
+  max_completion_length: 2048
